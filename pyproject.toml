@@ -1,16 +1,42 @@
 [project]
 name = "voice-assistant"
-version = "0.1.0"
-description = "Add your description here"
+version = "1.0.0"
+description = "智能语音助手 - 双阶段识别版 (KWS + ASR + Vision + LLM)"
 readme = "README.md"
 requires-python = ">=3.12"
+authors = [
+    { name = "Your Name", email = "your.email@example.com" }
+]
+keywords = ["voice", "assistant", "speech-recognition", "wake-word", "ai"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+
 dependencies = [
-    "open-interpreter>=0.4.3",
-    "pillow>=12.0.0",
-    "pyautogui>=0.9.54",
-    "requests>=2.32.5",
     "sherpa-onnx>=1.12.19",
-    "soundcard>=0.4.2",
     "numpy>=1.24.0",
     "pyaudio>=0.2.11",
+    "requests>=2.32.5",
+    "dashscope>=1.25.4",
+    "pillow>=12.0.0",
+    "pyautogui>=0.9.54",
+    "pygetwindow>=0.0.9",
+    "soundcard>=0.4.2",
 ]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+]
+
+[project.scripts]
+voice-assistant = "main:main"
+
+[build-system]
+requires = ["setuptools>=68.0.0", "wheel"]
+build-backend = "setuptools.build_meta"

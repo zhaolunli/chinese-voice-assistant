@@ -8,4 +8,41 @@ wheels/
 
 # Virtual environments
 .venv
+venv/
+env/
+
+# Models directory (large files)
 models/
+
+# Temporary data and cache
+data/
+*.wav
+*.mp3
+*.png
+*.jpg
+*.jpeg
+
+# IDE settings
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment variables
+.env
+.env.local
+
+# Test outputs
+test_output/
+test_keywords.txt
+
+# Logs
+*.log
+
+# Old/backup files
+voice_wake_up.py
