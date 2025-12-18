@@ -27,6 +27,7 @@ class TTSManager:
         self.audio_dir.mkdir(parents=True, exist_ok=True)
         self.is_playing = False
         self.should_stop = False  # 打断标志
+        self.current_stream = None  # 当前播放的音频流
 
         # 短文本TTS（dashscope，限制300字）
         try:
@@ -42,6 +43,7 @@ class TTSManager:
 
     def _play_audio_file(self, audio_file):
         """使用PyAudio直接播放音频文件"""
+        stream = None
         try:
             self.is_playing = True
             self.should_stop = False
@@ -53,6 +55,7 @@ class TTSManager:
                     rate=wf.getframerate(),
                     output=True
                 )
+                self.current_stream = stream  # 保存引用以便打断
 
                 chunk_size = 1024
                 data = wf.readframes(chunk_size)
@@ -60,16 +63,21 @@ class TTSManager:
                     stream.write(data)
                     data = wf.readframes(chunk_size)
 
-                stream.stop_stream()
-                stream.close()
-
             if self.should_stop:
-                print("   [TTS被打断]")
+                print("   [TTS已打断]")
 
-            time.sleep(0.3)
+            time.sleep(0.1)  # 缩短延迟
         except Exception as e:
-            print(f"播放音频失败: {e}")
+            if "Broken pipe" not in str(e):  # 忽略打断时的管道错误
+                print(f"播放音频失败: {e}")
         finally:
+            if stream:
+                try:
+                    stream.stop_stream()
+                    stream.close()
+                except:
+                    pass
+            self.current_stream = None
             self.is_playing = False
             self.should_stop = False
 
@@ -267,9 +275,15 @@ class TTSManager:
         ).start()
 
     def stop(self):
-        """停止当前播放"""
+        """停止当前播放（立即停止）"""
         if self.is_playing:
             self.should_stop = True
+            # 立即停止音频流
+            if self.current_stream:
+                try:
+                    self.current_stream.stop_stream()
+                except:
+                    pass
 
     def _delete_file(self, filepath):
         """删除临时文件"""

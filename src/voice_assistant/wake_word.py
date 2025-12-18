@@ -134,7 +134,7 @@ class SmartWakeWordSystem:
                     # 检测音量峰值，判断是否是真实的语音打断
                     volume = np.sqrt(np.mean(audio_data**2))
                     # 如果音量过低（可能是TTS回声），跳过检测
-                    if volume < 0.05:  # 阈值可调整
+                    if volume < 0.02:  # 降低阈值，更容易打断
                         time.sleep(0.01)
                         continue
                     # 音量足够高，可能是用户打断，继续检测
