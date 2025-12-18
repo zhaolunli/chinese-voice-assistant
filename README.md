@@ -239,7 +239,7 @@ ruff check src/
 | 视觉理解 | Qwen-VL-Plus |
 | 意图理解 | Qwen-Plus |
 | 音频处理 | PyAudio, NumPy |
-| 系统控制 | PyAutoGUI, PyGetWindow |
+| 系统控制 | pywinauto, PIL.ImageGrab |
 
 ---
 

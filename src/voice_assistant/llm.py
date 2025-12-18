@@ -6,6 +6,7 @@ from .config import DASHSCOPE_API_KEY, DASHSCOPE_API_URL
 from .tts import TTSManager
 from .system_control import SystemController
 from .vision import VisionUnderstanding
+from .vision_agent import VisionGuidedAgent
 
 
 class LLMController:
@@ -17,6 +18,8 @@ class LLMController:
         self.system_controller = SystemController()
         self.vision = VisionUnderstanding(api_url, api_key)
         self.tts = TTSManager(api_key)
+        # 新增：视觉引导代理
+        self.vision_agent = VisionGuidedAgent(self.api_url, self.api_key, self.system_controller)
 
     def understand_intent(self, text):
         """理解用户意图"""
@@ -26,16 +29,22 @@ class LLMController:
 1. 打开浏览器: {{"action": "open_browser", "url": "可选网址"}}
 2. 打开应用: {{"action": "open_app", "app": "应用名"}}
 3. 查看屏幕: {{"action": "understand_screen", "question": "要问的问题", "target": "截图范围"}}
-
-截图范围说明：
-- "browser": 优先截取浏览器窗口（Chrome/Edge/Firefox）
-- "active": 截取当前激活的窗口
-- "full": 截取整个屏幕（仅当用户明确要求"全屏"或"整个屏幕"时使用）
+4. 浏览器输入: {{"action": "browser_input", "content": "要输入或搜索的内容"}}
+5. 窗口管理: {{"action": "window_control", "operation": "maximize/minimize/close", "target": "窗口标题模式"}}
 
 重要规则：
-- 当用户提到"浏览器"、"网页"、"页面"时，使用 "target": "browser"
-- 当用户说"看看这个"、"当前窗口"时，使用 "target": "active"
-- 默认优先使用 "browser" 或 "active"，而不是 "full"
+- 当用户说"打开XX网站"、"打开浏览器"时，使用 open_browser
+- 当用户说"输入XX"、"搜索XX"、"访问XX"时，使用 browser_input（在浏览器地址栏输入）
+- 当用户说"最大化"、"最小化"、"关闭"窗口时，使用 window_control
+- 当用户问"浏览器显示什么"、"查看网页"时，使用 understand_screen
+- browser_input 会自动聚焦地址栏并输入内容，适用于导航和搜索
+
+示例：
+- "输入百度" → {{"action": "browser_input", "content": "baidu.com"}}
+- "搜索天气" → {{"action": "browser_input", "content": "天气"}}
+- "访问github" → {{"action": "browser_input", "content": "github.com"}}
+- "打开浏览器" → {{"action": "open_browser", "url": ""}}
+- "查看浏览器" → {{"action": "understand_screen", "target": "browser", "question": "描述内容"}}
 
 只返回JSON，不要其他内容。"""
 
@@ -49,11 +58,11 @@ class LLMController:
                 json={
                     "model": "qwen-plus",
                     "messages": [
-                        {"role": "system", "content": "你是一个智能助手，返回JSON格式的操作指令。优先使用窗口截图而不是全屏截图。"},
+                        {"role": "system", "content": "你是一个智能助手，返回JSON格式的操作指令。准确识别用户的操作意图。"},
                         {"role": "user", "content": prompt}
                     ],
                     "max_tokens": 500,
-                    "temperature": 0.3
+                    "temperature": 0.1
                 },
                 timeout=15
             )
@@ -77,16 +86,35 @@ class LLMController:
 
     def _simple_match(self, text):
         """简单关键词匹配"""
-        text = text.lower()
+        text_lower = text.lower()
 
-        # 浏览器相关
-        if any(w in text for w in ["浏览器", "网页", "页面"]):
-            if any(w in text for w in ["看", "查看", "截图", "显示"]):
+        # 浏览器输入相关（优先级最高）
+        if any(w in text_lower for w in ["输入", "搜索", "访问", "打开网址", "打开网站"]):
+            # 提取内容
+            for prefix in ["输入", "搜索", "访问", "打开网址", "打开网站"]:
+                if prefix in text:
+                    content = text.split(prefix, 1)[1].strip()
+                    if content:
+                        return {"action": "browser_input", "content": content}
+            return {"action": "browser_input", "content": text}
+
+        # 窗口管理
+        if "最大化" in text:
+            return {"action": "window_control", "operation": "maximize", "target": ".*"}
+        if "最小化" in text:
+            return {"action": "window_control", "operation": "minimize", "target": ".*"}
+        if any(w in text for w in ["关闭窗口", "关闭程序"]):
+            return {"action": "window_control", "operation": "close", "target": ".*"}
+
+        # 查看屏幕相关
+        if any(w in text_lower for w in ["浏览器", "网页", "页面"]):
+            if any(w in text_lower for w in ["看", "查看", "截图", "显示"]):
                 return {"action": "understand_screen", "target": "browser", "question": "请描述浏览器中显示的内容"}
+            # 如果只说"浏览器"没有其他动词，默认打开
             return {"action": "open_browser"}
 
         # 窗口相关
-        if any(w in text for w in ["窗口", "这个", "当前"]):
+        if any(w in text_lower for w in ["窗口", "这个", "当前"]):
             return {"action": "understand_screen", "target": "active", "question": "请描述窗口中的内容"}
 
         # 屏幕相关（只有明确说"屏幕"才用全屏）
@@ -94,7 +122,7 @@ class LLMController:
             return {"action": "understand_screen", "target": "full", "question": "请描述屏幕上的所有内容"}
 
         # 默认看看类（优先浏览器）
-        if any(w in text for w in ["看看", "查看", "截图"]):
+        if any(w in text_lower for w in ["看看", "查看", "截图"]):
             return {"action": "understand_screen", "target": "browser", "question": "请描述看到的内容"}
 
         # 应用相关
@@ -111,15 +139,25 @@ class LLMController:
 
         if action == "open_browser":
             url = intent.get("url", "")
-            self.system_controller.open_browser(url)
-            if enable_voice:
-                self.tts.speak_async("好的，已为您打开浏览器")
+            success = self.system_controller.open_browser(url)
+            if success:
+                if enable_voice:
+                    self.tts.speak_async("好的，已为您打开浏览器")
+            else:
+                print("✗ 打开浏览器失败")
+                if enable_voice:
+                    self.tts.speak_async("抱歉，打开浏览器失败")
 
         elif action == "open_app":
             app = intent.get("app", "")
-            self.system_controller.open_app(app)
-            if enable_voice:
-                self.tts.speak_async(f"好的，已为您打开{app}")
+            success = self.system_controller.open_app(app)
+            if success:
+                if enable_voice:
+                    self.tts.speak_async(f"好的，已为您打开{app}")
+            else:
+                print(f"✗ 打开应用失败: {app}")
+                if enable_voice:
+                    self.tts.speak_async(f"抱歉，打开{app}失败")
 
         elif action == "understand_screen":
             target = intent.get("target", "browser")
@@ -144,6 +182,49 @@ class LLMController:
                     self.tts.speak(short_result)
 
                 return result
+
+        elif action == "browser_input":
+            content = intent.get("content", "")
+            print(f"🌐 浏览器操作: {content}")
+
+            if enable_voice:
+                self.tts.speak_async("好的，让我看看界面")
+
+            # 使用视觉引导执行
+            success = self.vision_agent.execute_with_vision(
+                user_command=f"在浏览器中输入: {content}",
+                target="browser"
+            )
+
+            if success:
+                if enable_voice:
+                    self.tts.speak_async(f"好的，已输入完成")
+            else:
+                print(f"✗ 浏览器操作失败")
+                if enable_voice:
+                    self.tts.speak_async("抱歉，操作失败，请检查浏览器是否打开")
+
+        elif action == "window_control":
+            operation = intent.get("operation", "")
+            target = intent.get("target", "")
+            print(f"🪟 窗口操作: {operation} - {target}")
+
+            success = False
+            if operation == "maximize":
+                success = self.system_controller.maximize_window(target)
+            elif operation == "minimize":
+                success = self.system_controller.minimize_window(target)
+            elif operation == "close":
+                success = self.system_controller.close_window(target)
+
+            if success:
+                if enable_voice:
+                    self.tts.speak_async(f"好的，已{operation}窗口")
+            else:
+                print(f"✗ 窗口操作失败")
+                if enable_voice:
+                    self.tts.speak_async("抱歉，窗口操作失败")
+
         else:
             if enable_voice:
                 self.tts.speak_async("抱歉，我不太明白您的意思")
