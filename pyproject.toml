@@ -1,13 +1,13 @@
 [project]
 name = "voice-assistant"
-version = "1.0.0"
-description = "智能语音助手 - 双阶段识别版 (KWS + ASR + Vision + LLM)"
+version = "2.0.0"
+description = "智能语音助手 - React Agent + Windows-MCP (KWS + ASR + MCP)"
 readme = "README.md"
 requires-python = ">=3.12"
 authors = [
     { name = "Your Name", email = "your.email@example.com" }
 ]
-keywords = ["voice", "assistant", "speech-recognition", "wake-word", "ai"]
+keywords = ["voice", "assistant", "speech-recognition", "wake-word", "ai", "mcp", "react-agent"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -25,6 +25,8 @@ dependencies = [
     "pywinauto>=0.6.8",
     "comtypes>=1.4.0",
     "soundcard>=0.4.2",
+    # MCP 依赖
+    "mcp>=1.0.0", # 官方 MCP Python SDK
 ]
 
 [project.optional-dependencies]

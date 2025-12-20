@@ -15,7 +15,7 @@ from .config import (
     DEFAULT_WAKE_WORDS,
     CONFIG_DIR,
 )
-from .llm import LLMController
+from .react_agent import ReactAgent
 
 
 class SmartWakeWordSystem:
@@ -35,11 +35,15 @@ class SmartWakeWordSystem:
         # 阶段2: ASR模型（重量级）
         self.asr_model = self.create_asr_model()
 
-        # 控制器
-        self.controller = LLMController()
+        # React Agent (集成 MCP)
+        self.agent = ReactAgent()
+        print("正在启动 Windows-MCP Server...")
+        if not self.agent.start():
+            raise RuntimeError("启动 Windows-MCP Server 失败")
 
         print(f"✓ KWS模型已加载")
         print(f"✓ ASR模型已加载")
+        print(f"✓ Windows-MCP Server 已启动")
         print(f"语音播报: {'开启' if enable_voice else '关闭'}")
 
     def create_kws_model(self):
@@ -130,7 +134,7 @@ class SmartWakeWordSystem:
                 audio_data = np.frombuffer(audio_bytes, dtype=np.float32)
 
                 # TTS播放期间仍然监听，但需要更高音量才触发（允许打断）
-                if self.controller.tts.is_playing:
+                if self.agent.tts.is_playing:
                     # 检测音量峰值，判断是否是真实的语音打断
                     volume = np.sqrt(np.mean(audio_data**2))
                     # 如果音量过低（可能是TTS回声），跳过检测
@@ -153,8 +157,8 @@ class SmartWakeWordSystem:
                     print(f"\n✨ 检测到唤醒词: {result}")
 
                     # 打断正在播放的TTS
-                    if self.controller.tts.is_playing:
-                        self.controller.tts.stop()
+                    if self.agent.tts.is_playing:
+                        self.agent.tts.stop()
 
                     # 提示音
                     try:
@@ -164,7 +168,7 @@ class SmartWakeWordSystem:
                         pass
 
                     if self.enable_voice:
-                        self.controller.tts.speak_async("我在")
+                        self.agent.tts.speak_async("我在")
 
                     # 进入阶段2
                     self._enter_command_mode(p)
@@ -180,13 +184,17 @@ class SmartWakeWordSystem:
             print("\n停止中...")
         finally:
             self.running = False
+            # 停止 MCP Server
+            print("正在停止 Windows-MCP Server...")
+            self.agent.stop()
+            print("✓ Windows-MCP Server 已停止")
 
     def _enter_command_mode(self, pyaudio_instance):
         """阶段2: 录音识别"""
         print("💬 请说出指令...")
 
         # 等待TTS播完
-        while self.controller.tts.is_playing:
+        while self.agent.tts.is_playing:
             time.sleep(0.1)
 
         # 录音参数
@@ -238,17 +246,19 @@ class SmartWakeWordSystem:
             else:
                 print("   未识别到内容")
                 if self.enable_voice:
-                    self.controller.tts.speak_async("抱歉，我没听清")
+                    self.agent.tts.speak_async("抱歉，我没听清")
 
         except Exception as e:
             print(f"录音识别错误: {e}")
 
     def _execute_command(self, text):
-        """执行命令"""
-        print(f"🤖 正在理解指令: {text}")
+        """执行命令（使用 React Agent）"""
+        print(f"🤖 开始执行: {text}")
 
-        intent = self.controller.understand_intent(text)
-        print(f"💡 意图: {intent}")
+        # 使用 React Agent 执行（自动多轮推理）
+        result = self.agent.execute_command(text, enable_voice=self.enable_voice)
 
-        self.controller.execute_action(intent, enable_voice=self.enable_voice)
-        print("✓ 执行完成\n")
+        if result.get("success"):
+            print(f"✓ 执行完成 (共 {result.get('steps', 0)} 步)\n")
+        else:
+            print(f"✗ 执行失败: {result.get('message', '未知错误')}\n")
