@@ -12,7 +12,7 @@ import ctypes
 from ctypes import wintypes
 
 from .config import DASHSCOPE_API_KEY, DASHSCOPE_API_URL
-from .mcp_client import MCPClientSync, MCPResponse
+from .mcp_client import MCPManagerSync, MCPResponse
 from .tts import TTSManager
 from .vision import VisionUnderstanding
 
@@ -94,8 +94,20 @@ class ReActParser:
 
                         json_str = response[start_idx:end_idx]
 
-                        # 修复：将 Python 布尔值转换为 JSON 格式
+                        # 修复1：将 Python 布尔值转换为 JSON 格式
                         json_str = json_str.replace('True', 'true').replace('False', 'false').replace('None', 'null')
+
+                        # 修复2：将 Python 单引号字典转换为 JSON 双引号格式
+                        # 简单替换可能不完美，但对于大多数情况有效
+                        if json_str.startswith("{'") or "': '" in json_str:
+                            # 使用 ast.literal_eval 先转为 Python dict，再转 JSON
+                            import ast
+                            try:
+                                python_dict = ast.literal_eval(json_str)
+                                json_str = json.dumps(python_dict, ensure_ascii=False)
+                            except:
+                                # 降级：简单替换单引号为双引号
+                                json_str = json_str.replace("'", '"')
 
                         action_input = json.loads(json_str)
 
@@ -140,8 +152,8 @@ class ReactAgent:
         self.api_key = api_key or DASHSCOPE_API_KEY
         self.logger = logging.getLogger(__name__)
 
-        # MCP Client（同步封装）
-        self.mcp = MCPClientSync()
+        # MCP Manager（管理多个 MCP Server）
+        self.mcp = MCPManagerSync()
 
         # TTS
         self.tts = TTSManager(api_key)
@@ -159,21 +171,39 @@ class ReactAgent:
         self.max_steps = 5
 
     def start(self) -> bool:
-        """启动 Agent（启动 MCP Server）"""
-        success = self.mcp.start()
-        if success:
-            # 获取工具列表
-            self.available_tools = self.mcp.list_tools()
-            self.logger.info(f"✓ 已获取 {len(self.available_tools)} 个工具")
+        """启动 Agent（启动 MCP Servers）"""
+        print("\n⏳ 正在启动 MCP Servers...")
 
-            # 显示所有工具名称
-            print(f"✓ 已获取 {len(self.available_tools)} 个 MCP 工具:")
-            if self.available_tools:
-                for i, tool in enumerate(self.available_tools, 1):
-                    name = tool['name']
-                    desc = tool.get('description', '')[:50]  # 只显示前50字符
-                    print(f"  {i}. {name}: {desc}")
-                print()
+        # 配置 MCP Servers
+        servers = [
+            # Windows-MCP: 系统级操作（必需）
+            ("windows", "uvx", ["windows-mcp"], 60),
+            # Playwright-MCP: 浏览器操作（可选，首次启动较慢）
+            ("playwright", "npx", ["@playwright/mcp@latest"], 120)  # 增加到120秒
+        ]
+
+        success = self.mcp.start(servers)
+        if success:
+            # 获取所有工具列表
+            self.available_tools = self.mcp.list_all_tools()
+
+            # 统计工具数量
+            windows_tools = self.mcp.get_tools_by_server("windows")
+            playwright_tools = self.mcp.get_tools_by_server("playwright")
+
+            if windows_tools:
+                print(f"  ✓ Windows-MCP: {len(windows_tools)} 个工具")
+                self.logger.info(f"✓ Windows-MCP: {len(windows_tools)} 个工具")
+
+            if playwright_tools:
+                print(f"  ✓ Playwright-MCP: {len(playwright_tools)} 个工具")
+                self.logger.info(f"✓ Playwright-MCP: {len(playwright_tools)} 个工具")
+            else:
+                print(f"  ⚠️ Playwright-MCP 未启动（浏览器操作将使用 Windows 工具）")
+                self.logger.warning("Playwright-MCP 未启动")
+
+            print(f"  📊 总计: {len(self.available_tools)} 个工具")
+            self.logger.info(f"✓ 总计 {len(self.available_tools)} 个工具")
 
         return success
 
@@ -544,7 +574,7 @@ class ReactAgent:
             print()
             self._prompt_shown = True
 
-        return f"""你是一个智能助手，使用 Windows-MCP 工具完成用户任务。
+        return f"""你是一个智能助手，同时使用 Windows-MCP 和 Playwright-MCP 工具完成用户任务。
 
 按照 ReAct (Reasoning and Acting) 框架思考和行动：
 1. Thought: 分析当前情况，思考下一步
@@ -552,6 +582,16 @@ class ReactAgent:
 3. Action Input: 提供工具参数
 4. Observation: 观察执行结果（由系统提供）
 5. 重复以上步骤直到完成
+
+工具选择策略：
+• 浏览器操作（导航、点击网页元素、填写表单等）→ **必须使用 Playwright 工具**（browser_*）
+  - 例如：browser_navigate、browser_click、browser_type、browser_snapshot
+  - ⚠️ 浏览器操作前必须先调用 browser_snapshot 获取页面元素
+  - ⚠️ 只能使用 browser_snapshot 返回的 ref（格式：e38、e77等），不能使用 State-Tool 的 ref（格式：49、50等）
+  - Playwright 更快、更可靠、理解网页结构
+• 桌面操作（打开应用、系统快捷键、窗口管理等）→ 使用 Windows 工具
+  - 例如：App-Tool、Shortcut-Tool、Desktop-Tool
+  - State-Tool 只用于了解桌面状态，不用于浏览器内操作
 
 可用工具：
 {tool_descriptions}
@@ -567,10 +607,12 @@ Final Answer: [总结结果]
 
 重要规则：
 1. 每次只执行一个动作
-2. 优先使用快捷键和简单操作，避免复杂流程
-3. 如果任务不清晰或无法理解，直接返回 Final Answer 说明原因
-4. 最多 5 步必须完成，保持高效
-5. 如果连续失败 2 次，立即停止并返回 Final Answer"""
+2. 浏览器操作必须使用 Playwright 工具（browser_*），先 browser_snapshot 再操作
+3. 不要混用 State-Tool 和 browser_* 的 ref 系统
+4. 优先使用快捷键和简单操作，避免复杂流程
+5. 如果任务不清晰或无法理解，直接返回 Final Answer 说明原因
+6. 最多 5 步必须完成，保持高效
+7. 如果连续失败 2 次，立即停止并返回 Final Answer"""
 
     def _format_tool_descriptions(self) -> str:
         """格式化工具描述"""

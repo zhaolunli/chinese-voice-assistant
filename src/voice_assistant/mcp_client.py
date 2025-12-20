@@ -1,7 +1,7 @@
-"""MCP Client - 连接到 Windows-MCP Server（使用官方 SDK）"""
+"""MCP Client - 连接到多个 MCP Servers（使用官方 SDK）"""
 import asyncio
 import logging
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 
@@ -296,6 +296,230 @@ class MCPClientSync:
     def shortcut(self, keys: str) -> MCPResponse:
         """快捷键（同步）"""
         return self.call_tool("Shortcut-Tool", {"keys": keys})
+
+
+# ==================== MCP Manager（管理多个 MCP Server）====================
+
+class MCPManager:
+    """
+    MCP Manager - 管理多个 MCP Server
+
+    支持同时连接 Windows-MCP 和 Playwright-MCP，
+    根据工具名称自动路由到对应的 Server
+    """
+
+    def __init__(self):
+        self.logger = logging.getLogger(__name__)
+        self.servers: Dict[str, MCPClient] = {}
+        self.exit_stack = AsyncExitStack()
+        self._started = False
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+
+    async def add_server_async(
+        self,
+        name: str,
+        command: str,
+        args: List[str],
+        timeout: int = 60
+    ) -> bool:
+        """
+        添加并启动一个 MCP Server（异步）
+
+        Args:
+            name: Server 名称（例如 "windows", "playwright"）
+            command: 启动命令（例如 "uvx", "npx"）
+            args: 命令参数（例如 ["windows-mcp"], ["@playwright/mcp@latest"]）
+            timeout: 启动超时时间（秒），默认60秒
+
+        Returns:
+            是否成功启动
+        """
+        try:
+            self.logger.info(f"正在启动 {name} MCP Server...")
+            print(f"⏳ 正在启动 {name} MCP Server（最多等待 {timeout} 秒）...")
+
+            # 配置服务器参数
+            server_params = StdioServerParameters(
+                command=command,
+                args=args,
+                env=None
+            )
+
+            # 建立 stdio 传输通道（带超时）
+            stdio_transport = await asyncio.wait_for(
+                self.exit_stack.enter_async_context(
+                    stdio_client(server_params)
+                ),
+                timeout=timeout
+            )
+            stdio, write = stdio_transport
+
+            # 创建客户端会话
+            session = await asyncio.wait_for(
+                self.exit_stack.enter_async_context(
+                    ClientSession(stdio, write)
+                ),
+                timeout=10
+            )
+
+            # 初始化连接
+            await asyncio.wait_for(session.initialize(), timeout=10)
+
+            # 创建 MCPClient 并保存
+            client = MCPClient()
+            client.session = session
+            client.exit_stack = self.exit_stack
+            await client.refresh_tools()
+
+            self.servers[name] = client
+
+            self.logger.info(f"✓ {name} MCP Server 已启动")
+            self.logger.info(f"✓ {name} 可用工具数量: {len(client.available_tools)}")
+            print(f"✅ {name} MCP Server 启动成功（{len(client.available_tools)} 个工具）")
+
+            return True
+
+        except asyncio.TimeoutError:
+            self.logger.error(f"启动 {name} MCP Server 超时")
+            print(f"❌ {name} MCP Server 启动超时")
+            return False
+        except Exception as e:
+            self.logger.error(f"启动 {name} MCP Server 失败: {e}")
+            print(f"❌ {name} MCP Server 启动失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    async def stop_all_async(self):
+        """停止所有 MCP Server（异步）"""
+        try:
+            await self.exit_stack.aclose()
+            self.servers.clear()
+            self.logger.info("✓ 所有 MCP Server 已停止")
+        except Exception as e:
+            self.logger.error(f"停止服务器失败: {e}")
+
+    async def list_all_tools_async(self) -> List[Dict[str, Any]]:
+        """获取所有 Server 的工具列表（异步）"""
+        all_tools = []
+        for server_name, client in self.servers.items():
+            tools = await client.list_tools()
+            # 添加 server 来源标记
+            for tool in tools:
+                tool["_server"] = server_name
+            all_tools.extend(tools)
+        return all_tools
+
+    async def call_tool_async(
+        self,
+        tool_name: str,
+        arguments: Dict[str, Any] = None
+    ) -> MCPResponse:
+        """
+        调用工具（异步）
+
+        自动根据工具名称路由到对应的 Server
+        """
+        # 查找拥有该工具的 Server
+        for server_name, client in self.servers.items():
+            tools = await client.list_tools()
+            if any(t["name"] == tool_name for t in tools):
+                self.logger.debug(f"使用 {server_name} Server 调用工具: {tool_name}")
+                return await client.call_tool(tool_name, arguments)
+
+        # 未找到工具
+        return MCPResponse(
+            success=False,
+            error=f"工具 '{tool_name}' 不存在于任何 MCP Server"
+        )
+
+
+class MCPManagerSync:
+    """
+    MCP Manager 的同步封装
+
+    在同步代码中使用 MCP Manager
+    """
+
+    def __init__(self):
+        self.manager = MCPManager()
+        self.loop: Optional[asyncio.AbstractEventLoop] = None
+        self._started = False
+
+    def start(self, servers: List[Tuple[str, str, List[str], int]]) -> bool:
+        """
+        启动所有 MCP Server（同步）
+
+        Args:
+            servers: Server 配置列表，每项为 (name, command, args, timeout)
+                例如：[
+                    ("windows", "uvx", ["windows-mcp"], 60),
+                    ("playwright", "npx", ["@playwright/mcp@latest"], 120)
+                ]
+
+        Returns:
+            是否至少启动了一个 Server
+        """
+        if self._started:
+            return True
+
+        # 创建新的事件循环
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
+
+        # 启动所有 Server
+        success_count = 0
+        for name, command, args, timeout in servers:
+            try:
+                success = self.loop.run_until_complete(
+                    self.manager.add_server_async(name, command, args, timeout)
+                )
+                if success:
+                    success_count += 1
+            except Exception as e:
+                print(f"❌ {name} Server 启动异常: {e}")
+                continue
+
+        if success_count > 0:
+            print(f"\n✅ 成功启动 {success_count}/{len(servers)} 个 MCP Server\n")
+            self._started = True
+            return True
+        else:
+            print(f"\n❌ 所有 MCP Server 启动失败\n")
+            self._started = False
+            return False
+
+    def stop(self):
+        """停止所有 MCP Server（同步）"""
+        if not self._started or not self.loop:
+            return
+
+        self.loop.run_until_complete(self.manager.stop_all_async())
+        self.loop.close()
+        self._started = False
+
+    def list_all_tools(self) -> List[Dict[str, Any]]:
+        """获取所有工具列表（同步）"""
+        if not self._started:
+            return []
+        return self.loop.run_until_complete(self.manager.list_all_tools_async())
+
+    def call_tool(
+        self,
+        tool_name: str,
+        arguments: Dict[str, Any] = None
+    ) -> MCPResponse:
+        """调用工具（同步）"""
+        if not self._started:
+            return MCPResponse(success=False, error="MCP Manager 未启动")
+        return self.loop.run_until_complete(
+            self.manager.call_tool_async(tool_name, arguments)
+        )
+
+    def get_tools_by_server(self, server_name: str) -> List[Dict[str, Any]]:
+        """获取指定 Server 的工具列表"""
+        all_tools = self.list_all_tools()
+        return [t for t in all_tools if t.get("_server") == server_name]
 
 
 # ==================== 测试代码 ====================

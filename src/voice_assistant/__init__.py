@@ -8,7 +8,7 @@
 from .wake_word import SmartWakeWordSystem
 from .tts import TTSManager
 from .vision import VisionUnderstanding
-from .mcp_client import MCPClient, MCPClientSync, MCPResponse
+from .mcp_client import MCPClient, MCPClientSync, MCPManager, MCPManagerSync, MCPResponse
 from .react_agent import ReactAgent, ReActParser, ReActStep
 
 __version__ = "2.0.0"
@@ -18,6 +18,8 @@ __all__ = [
     "VisionUnderstanding",
     "MCPClient",
     "MCPClientSync",
+    "MCPManager",
+    "MCPManagerSync",
     "MCPResponse",
     "ReactAgent",
     "ReActParser",

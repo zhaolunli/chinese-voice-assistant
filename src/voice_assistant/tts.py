@@ -278,12 +278,16 @@ class TTSManager:
         """停止当前播放（立即停止）"""
         if self.is_playing:
             self.should_stop = True
+            self.is_playing = False  # 立即标记为已停止
             # 立即停止音频流
             if self.current_stream:
                 try:
                     self.current_stream.stop_stream()
+                    self.current_stream.close()
                 except:
                     pass
+            # 清空当前流引用
+            self.current_stream = None
 
     def _delete_file(self, filepath):
         """删除临时文件"""
