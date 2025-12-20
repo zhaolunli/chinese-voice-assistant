@@ -5,10 +5,16 @@ import re
 import requests
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
+from pathlib import Path
+from PIL import ImageGrab
+import tempfile
+import ctypes
+from ctypes import wintypes
 
 from .config import DASHSCOPE_API_KEY, DASHSCOPE_API_URL
 from .mcp_client import MCPClientSync, MCPResponse
 from .tts import TTSManager
+from .vision import VisionUnderstanding
 
 
 @dataclass
@@ -140,6 +146,9 @@ class ReactAgent:
         # TTS
         self.tts = TTSManager(api_key)
 
+        # Vision（视觉理解）
+        self.vision = VisionUnderstanding(api_url, api_key)
+
         # React 历史记录
         self.history: List[ReActStep] = []
 
@@ -174,7 +183,7 @@ class ReactAgent:
 
     def execute_command(self, user_command: str, enable_voice: bool = True) -> Dict:
         """
-        执行用户命令（使用 React 循环）
+        执行用户命令（智能判断使用 Vision 或 React 循环）
 
         Args:
             user_command: 用户指令
@@ -188,6 +197,207 @@ class ReactAgent:
         if enable_voice:
             self.tts.speak_async("好的，让我来处理")
 
+        # 判断是否需要视觉理解
+        if self._needs_vision_understanding(user_command):
+            self.logger.info("使用 Vision 模式（视觉理解）")
+            print("💡 检测到视觉理解任务，使用 Vision API...")
+            return self._vision_mode(user_command, enable_voice)
+        else:
+            self.logger.info("使用 React 模式（操作执行）")
+            return self._react_mode(user_command, enable_voice)
+
+    def _needs_vision_understanding(self, command: str) -> bool:
+        """
+        判断是否需要视觉理解
+
+        视觉理解关键词：看、查看、讲解、描述、显示、分析、识别
+        操作关键词：点击、输入、打开、关闭、滚动、搜索
+        """
+        vision_keywords = [
+            "看", "查看", "讲解", "描述", "显示什么", "显示的",
+            "分析", "识别", "内容是", "画面", "截图", "图片"
+        ]
+
+        operation_keywords = [
+            "点击", "输入", "打开", "关闭", "启动", "切换",
+            "滚动", "搜索", "执行", "运行", "按"
+        ]
+
+        # 如果包含操作关键词，优先使用 React 模式
+        if any(kw in command for kw in operation_keywords):
+            return False
+
+        # 如果包含视觉关键词，使用 Vision 模式
+        if any(kw in command for kw in vision_keywords):
+            return True
+
+        # 默认使用 React 模式
+        return False
+
+    def _vision_mode(self, user_command: str, enable_voice: bool) -> Dict:
+        """
+        视觉理解模式
+
+        Args:
+            user_command: 用户指令
+            enable_voice: 是否语音播报
+
+        Returns:
+            执行结果
+        """
+        try:
+            # 智能判断截图范围
+            target = self._determine_screenshot_target(user_command)
+
+            # 1. 截图
+            print(f"📸 正在截图 ({target})...")
+            screenshot_path = self._take_screenshot(target)
+
+            # 2. 调用 Vision API
+            print("🔍 正在分析图像...")
+            analysis = self.vision.understand_screen(
+                screenshot_path,
+                question=user_command
+            )
+
+            # 输出分析结果
+            if analysis:
+                print(f"\n📊 分析结果:\n{analysis}\n")
+            else:
+                print("⚠️ 未获取到分析结果")
+
+            # 3. 语音播报
+            if enable_voice and analysis:
+                self.tts.speak_async(analysis)
+
+            # 4. 清理临时文件
+            try:
+                Path(screenshot_path).unlink()
+            except:
+                pass
+
+            return {
+                "success": True,
+                "message": analysis,
+                "mode": "vision"
+            }
+
+        except Exception as e:
+            error_msg = f"视觉理解失败: {e}"
+            self.logger.error(error_msg)
+            if enable_voice:
+                self.tts.speak_async("抱歉，视觉理解失败")
+            return {
+                "success": False,
+                "message": error_msg,
+                "mode": "vision"
+            }
+
+    def _determine_screenshot_target(self, command: str) -> str:
+        """
+        根据指令判断截图范围
+
+        Returns:
+            "window" - 当前窗口
+            "screen" - 全屏
+        """
+        # 明确指定窗口的关键词
+        window_keywords = ["窗口", "浏览器", "chrome", "应用"]
+
+        # 如果包含窗口相关关键词，优先截取窗口
+        if any(kw in command.lower() for kw in window_keywords):
+            return "window"
+
+        # 默认窗口截图（节省 Vision API token）
+        return "window"
+
+    def _get_foreground_window_rect(self) -> Optional[tuple]:
+        """
+        获取前台窗口坐标（DPI感知）
+
+        Returns:
+            (left, top, right, bottom) 或 None
+        """
+        try:
+            # 设置 DPI 感知
+            try:
+                ctypes.windll.shcore.SetProcessDpiAwareness(2)
+            except:
+                # 可能已经设置过，忽略错误
+                pass
+
+            # 获取前台窗口句柄
+            hwnd = ctypes.windll.user32.GetForegroundWindow()
+            if not hwnd:
+                return None
+
+            # 获取窗口矩形
+            rect = wintypes.RECT()
+            ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
+
+            # 修正：去除边框和阴影（Windows 10/11 典型值）
+            padding = 8
+            bbox = (
+                rect.left + padding,
+                rect.top,
+                rect.right - padding,
+                rect.bottom - padding
+            )
+
+            self.logger.debug(f"窗口坐标: 原始{(rect.left, rect.top, rect.right, rect.bottom)} -> 修正{bbox}")
+            return bbox
+
+        except Exception as e:
+            self.logger.warning(f"获取窗口坐标失败: {e}")
+            return None
+
+    def _take_screenshot(self, target: str = "window") -> str:
+        """
+        智能截图
+
+        Args:
+            target: "window" (当前窗口，默认) 或 "screen" (全屏)
+
+        Returns:
+            截图文件路径
+        """
+        # 创建临时文件
+        temp_file = tempfile.NamedTemporaryFile(
+            suffix='.png',
+            delete=False
+        )
+        temp_path = temp_file.name
+        temp_file.close()
+
+        if target == "window":
+            # 尝试窗口截图
+            bbox = self._get_foreground_window_rect()
+            if bbox:
+                self.logger.info(f"使用窗口截图: {bbox}")
+                screenshot = ImageGrab.grab(bbox=bbox)
+            else:
+                # 降级到全屏
+                self.logger.warning("窗口坐标获取失败，降级到全屏截图")
+                print("⚠️ 窗口截图失败，使用全屏模式")
+                screenshot = ImageGrab.grab()
+        else:
+            # 全屏截图
+            screenshot = ImageGrab.grab()
+
+        screenshot.save(temp_path)
+        return temp_path
+
+    def _react_mode(self, user_command: str, enable_voice: bool) -> Dict:
+        """
+        React 操作模式（使用 MCP 工具）
+
+        Args:
+            user_command: 用户指令
+            enable_voice: 是否语音播报
+
+        Returns:
+            执行结果
+        """
         # 重置历史
         self.history = []
 
