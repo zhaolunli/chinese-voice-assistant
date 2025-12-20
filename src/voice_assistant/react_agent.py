@@ -25,6 +25,7 @@ class ReActStep:
     action_input: Dict[str, Any]
     observation: str
     success: bool
+    timestamp: float  # 时间戳（秒）
 
 
 class ReActParser:
@@ -524,13 +525,15 @@ class ReactAgent:
                 error_msg = observation.error if observation else '未知错误'
                 print(f"✗ 失败: {error_msg}")
 
-            # 5. 记录历史
+            # 5. 记录历史（带时间戳）
+            import time
             self.history.append(ReActStep(
                 thought=parsed_action["thought"],
                 action=parsed_action["action"],
                 action_input=parsed_action["action_input"],
                 observation=observation.content if observation else "执行失败",
-                success=observation.success if observation else False
+                success=observation.success if observation else False,
+                timestamp=time.time()
             ))
 
             # 6. 如果失败，继续尝试调整策略
@@ -709,24 +712,21 @@ Final Answer: [总结结果]
         if self.long_term_memory["summary"]:
             memory_context = f"\n上次状态: {self.long_term_memory['summary']}\n"
 
-        # 短期记忆（5分钟内的历史步骤）
+        # 短期记忆（5分钟时间窗口）
         history_text = ""
         if self.history:
             import time
             current_time = time.time()
-            recent_steps = []
+            five_minutes_ago = current_time - 300  # 300秒 = 5分钟
 
             # 筛选5分钟内的步骤
-            for step in reversed(self.history):
-                # 简单实现：假设每步约10-30秒，取最近10步作为5分钟窗口
-                if len(recent_steps) >= 10:
-                    break
-                recent_steps.append(step)
-
-            recent_steps.reverse()  # 恢复时间顺序
+            recent_steps = [
+                step for step in self.history
+                if step.timestamp >= five_minutes_ago
+            ]
 
             if recent_steps:
-                history_text = "\n最近的操作历史:\n"
+                history_text = "\n最近5分钟的操作:\n"
                 for i, step in enumerate(recent_steps, 1):
                     history_text += f"\nStep {i}:\n"
                     history_text += f"Thought: {step.thought}\n"
