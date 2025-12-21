@@ -13,7 +13,7 @@ from ctypes import wintypes
 
 from .config import DASHSCOPE_API_KEY, DASHSCOPE_API_URL
 from .mcp_client import MCPManagerSync, MCPResponse
-from .tts import TTSManager
+from .tts import TTSManagerStreaming
 from .vision import VisionUnderstanding
 
 
@@ -73,7 +73,7 @@ class ReActParser:
             action_match = re.search(ReActParser.ACTION_PATTERN, response)
             action = action_match.group(1).strip() if action_match else ""
 
-            # 提取 Action Input - 使用更智能的方法提取 JSON
+            # 提取 Action Input - 严格 JSON 格式
             action_input = {}
             action_input_index = response.find("Action Input:")
             if action_input_index != -1:
@@ -95,29 +95,18 @@ class ReActParser:
 
                         json_str = response[start_idx:end_idx]
 
-                        # 修复1：将 Python 布尔值转换为 JSON 格式
+                        # 仅做最小兼容：Python 布尔值转 JSON 格式
                         json_str = json_str.replace('True', 'true').replace('False', 'false').replace('None', 'null')
 
-                        # 修复2：将 Python 单引号字典转换为 JSON 双引号格式
-                        # 简单替换可能不完美，但对于大多数情况有效
-                        if json_str.startswith("{'") or "': '" in json_str:
-                            # 使用 ast.literal_eval 先转为 Python dict，再转 JSON
-                            import ast
-                            try:
-                                python_dict = ast.literal_eval(json_str)
-                                json_str = json.dumps(python_dict, ensure_ascii=False)
-                            except:
-                                # 降级：简单替换单引号为双引号
-                                json_str = json_str.replace("'", '"')
-
+                        # 严格解析 JSON（不兼容单引号等其他格式）
                         action_input = json.loads(json_str)
 
                         print(f"[调试] 解析到的参数: {action_input}")
 
                 except json.JSONDecodeError as e:
-                    print(f"[调试] JSON 解析失败: {e}")
-                    print(f"[调试] 原始字符串: {response[start_idx:end_idx]}")
-                    print(f"[调试] 处理后字符串: {json_str}")
+                    print(f"❌ Action Input 格式错误: {e}")
+                    print(f"   原始内容: {response[start_idx:end_idx]}")
+                    print(f"   请使用标准 JSON 格式: {{\"key\": \"value\"}}")
                 except Exception as e:
                     print(f"[调试] 提取 JSON 失败: {e}")
             else:
@@ -156,8 +145,8 @@ class ReactAgent:
         # MCP Manager（管理多个 MCP Server）
         self.mcp = MCPManagerSync()
 
-        # TTS
-        self.tts = TTSManager(api_key)
+        # TTS（流式 - RealtimeTTS + Edge TTS）
+        self.tts = TTSManagerStreaming(engine_type="edge")
 
         # Vision（视觉理解）
         self.vision = VisionUnderstanding(api_url, api_key)
@@ -683,6 +672,11 @@ class ReactAgent:
 Thought: [你的思考过程]
 Action: [工具名称]
 Action Input: {{"param": "value"}}
+
+⚠️ Action Input 必须是有效的 JSON 格式：
+✅ 正确：Action Input: {{"ref": "e386", "element": "link"}}
+❌ 错误：Action Input:\n  ref: e386\n  element: link
+❌ 错误：Action Input: {{'ref': 'e386'}}  (不能用单引号)
 
 如果任务完成，输出：
 Thought: 任务已完成

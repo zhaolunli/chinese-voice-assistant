@@ -302,3 +302,144 @@ class TTSManager:
             self.p.terminate()
         except:
             pass
+
+
+# ==================== 流式 TTS Manager（基于 RealtimeTTS）====================
+
+class TTSManagerStreaming:
+    """
+    流式TTS语音播报管理器（基于RealtimeTTS）
+
+    支持：
+    - Edge TTS（免费，推荐）
+    - Azure Speech Services（高质量）
+    - Coqui TTS（本地）
+    """
+
+    def __init__(self, engine_type="edge", api_key=None, voice=None):
+        """
+        初始化流式TTS
+
+        Args:
+            engine_type: "edge"（免费）, "azure"（高质量）, "coqui"（本地）
+            api_key: Azure API key（仅 Azure 需要）
+            voice: 自定义音色名称
+        """
+        self.is_playing = False
+        self.stream = None
+        self.engine_type = engine_type
+
+        # 导入 RealtimeTTS（按需导入，避免懒加载问题）
+        try:
+            from RealtimeTTS import TextToAudioStream
+        except ImportError:
+            raise ImportError("需要安装 RealtimeTTS: pip install realtimetts")
+
+        # 选择引擎（按需导入）
+        if engine_type == "edge":
+            # Edge TTS（免费，推荐）
+            try:
+                from RealtimeTTS import SystemEngine
+            except ImportError:
+                raise ImportError("需要安装 SystemEngine: pip install realtimetts[system] 或 pip install pyttsx3")
+
+            default_voice = "zh-CN-XiaoxiaoNeural"  # 晓晓音色（温柔女声）
+            self.engine = SystemEngine(
+                voice=voice or default_voice
+            )
+            print(f"✓ 使用 Edge TTS（免费）- 音色: {voice or default_voice}")
+
+        elif engine_type == "azure":
+            # Azure（音质最好）
+            try:
+                from RealtimeTTS import AzureEngine
+            except ImportError:
+                raise ImportError("需要安装 Azure 引擎: pip install realtimetts[azure]")
+
+            if not api_key:
+                raise ValueError("Azure 引擎需要 API key")
+            default_voice = "zh-CN-XiaoxiaoNeural"
+            self.engine = AzureEngine(
+                speech_key=api_key,
+                speech_region="eastasia",  # 东亚区域
+                voice=voice or default_voice
+            )
+            print(f"✓ 使用 Azure TTS - 音色: {voice or default_voice}")
+
+        elif engine_type == "coqui":
+            # Coqui（本地）
+            try:
+                from RealtimeTTS import CoquiEngine
+            except ImportError:
+                raise ImportError("需要安装 Coqui 引擎: pip install realtimetts[coqui]")
+
+            self.engine = CoquiEngine(
+                language="zh"
+            )
+            print("✓ 使用 Coqui TTS（本地）")
+
+        else:
+            raise ValueError(f"不支持的引擎类型: {engine_type}")
+
+        # 创建流
+        self.stream = TextToAudioStream(self.engine)
+        print(f"✓ RealtimeTTS 流式引擎已初始化")
+
+    def speak(self, text, voice=None, wait=True):
+        """
+        流式语音播报
+
+        Args:
+            text: 要播报的文本
+            voice: 音色（暂不支持动态切换）
+            wait: 是否等待播放完成
+        """
+        if not text or not text.strip():
+            return
+
+        text = text.strip()
+        print(f"📝 文本长度: {len(text)} 字符")
+        print(f"   使用流式TTS（{self.engine_type}）")
+
+        try:
+            self.is_playing = True
+
+            # 喂入文本（立即开始生成）
+            self.stream.feed(text)
+
+            if wait:
+                # 同步播放（阻塞）
+                self.stream.play()
+            else:
+                # 异步播放（非阻塞）
+                self.stream.play_async()
+
+        except Exception as e:
+            print(f"流式TTS播放失败: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            if wait:
+                self.is_playing = False
+
+    def speak_async(self, text, voice=None):
+        """异步播放（不阻塞）"""
+        self.speak(text, voice, wait=False)
+
+    def stop(self):
+        """停止播放（立即打断）"""
+        if self.stream and self.is_playing:
+            try:
+                self.stream.stop()
+                self.is_playing = False
+                print("   [流式TTS已打断]")
+            except Exception as e:
+                print(f"停止TTS失败: {e}")
+
+    def __del__(self):
+        """清理资源"""
+        if self.stream:
+            try:
+                self.stream.stop()
+            except:
+                pass

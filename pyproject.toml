@@ -25,6 +25,8 @@ dependencies = [
     "soundcard>=0.4.2",
     # MCP 依赖
     "mcp>=1.0.0", # 官方 MCP Python SDK
+    "realtimetts>=0.5.7",
+    "pyttsx3>=2.99",
 ]
 
 [project.optional-dependencies]
