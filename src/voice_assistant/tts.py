@@ -500,47 +500,51 @@ class TTSManagerStreaming:
                 self.should_stop = False
 
                 # 生成音频（返回生成器，产生 AudioChunk 对象）
-                audio_chunks = list(self.piper_voice.synthesize(text))
+                audio_generator = self.piper_voice.synthesize(text)
 
-                if not audio_chunks:
-                    self.is_playing = False
-                    return
-
-                # 获取第一个 chunk（通常只有一个）
-                chunk = audio_chunks[0]
-
-                # 从 AudioChunk 提取音频数据
-                audio_float = chunk.audio_float_array  # numpy array, float32, -1.0 到 1.0
-                sample_rate = chunk.sample_rate
-
-                # 转换为 int16 格式
-                audio_int16 = (audio_float * 32767).astype(np.int16)
-
-                # 创建 PyAudio 流
-                stream = self.p.open(
-                    format=pyaudio.paInt16,
-                    channels=1,
-                    rate=sample_rate,
-                    output=True,
-                    frames_per_buffer=512
-                )
-                self.current_stream = stream
-
-                # 分块播放（可快速中断）
-                chunk_size = 512
-                for i in range(0, len(audio_int16), chunk_size):
+                # 遍历所有 AudioChunk（可能有多个）
+                for chunk in audio_generator:
                     if self.should_stop:
                         break
 
-                    audio_chunk = audio_int16[i:i + chunk_size]
-                    stream.write(audio_chunk.tobytes())
+                    # 从 AudioChunk 提取音频数据
+                    audio_float = chunk.audio_float_array
+                    sample_rate = chunk.sample_rate
+
+                    # 转换为 int16 格式
+                    audio_int16 = (audio_float * 32767).astype(np.int16)
+
+                    print(f"[Piper] 播放音频块: {len(audio_float)} samples ({len(audio_float)/sample_rate:.1f}秒)")
+
+                    # 创建 PyAudio 流（第一次）
+                    if not self.current_stream:
+                        self.current_stream = self.p.open(
+                            format=pyaudio.paInt16,
+                            channels=1,
+                            rate=sample_rate,
+                            output=True,
+                            frames_per_buffer=512
+                        )
+
+                    # 分块播放（可快速中断）
+                    chunk_size = 512
+                    for i in range(0, len(audio_int16), chunk_size):
+                        if self.should_stop:
+                            break
+
+                        audio_chunk = audio_int16[i:i + chunk_size]
+                        self.current_stream.write(audio_chunk.tobytes())
+
+                    if self.should_stop:
+                        break
 
                 # 清理
-                stream.stop_stream()
-                stream.close()
-                self.current_stream = None
-                self.is_playing = False
+                if self.current_stream:
+                    self.current_stream.stop_stream()
+                    self.current_stream.close()
+                    self.current_stream = None
 
+                self.is_playing = False
                 if self.should_stop:
                     print("   [Piper TTS已打断]")
 

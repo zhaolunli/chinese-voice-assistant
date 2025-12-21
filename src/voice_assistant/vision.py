@@ -13,16 +13,27 @@ class VisionUnderstanding:
         self.api_key = api_key or DASHSCOPE_API_KEY
 
     def understand_screen(self, image_path, question="屏幕上有什么内容？请详细描述。"):
-        """使用Qwen3-VL-Plus理解屏幕"""
+        """使用Qwen-VL-Max理解屏幕"""
         try:
+            # 直接读取图片，不压缩
             with open(image_path, "rb") as f:
                 img_base64 = base64.b64encode(f.read()).decode()
+
+            print(f"[视觉API] 图片大小: {len(img_base64) / 1024:.1f} KB")
 
             messages = [{
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": question},
-                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_base64}"}}
+                    {
+                        "type": "text",
+                        "text": question
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/png;base64,{img_base64}"
+                        }
+                    }
                 ]
             }]
 
@@ -33,18 +44,29 @@ class VisionUnderstanding:
                     "Content-Type": "application/json"
                 },
                 json={
-                    "model": "qwen-vl-plus",
+                    "model": "qwen-vl-max",
                     "messages": messages,
-                    "max_tokens": 1000,
+                    "max_tokens": 2000,
                     "temperature": 0.7
                 },
-                timeout=30
+                timeout=60
             )
 
             if response.status_code == 200:
                 result = response.json()
                 return result["choices"][0]["message"]["content"]
             else:
-                return f"API错误 {response.status_code}"
+                # 详细错误信息
+                error_msg = f"API错误 {response.status_code}"
+                try:
+                    error_detail = response.json()
+                    print(f"[视觉API错误详情] {error_detail}")
+                    error_msg += f": {error_detail.get('message', error_detail)}"
+                except:
+                    print(f"[视觉API错误] 状态码: {response.status_code}, 响应: {response.text[:200]}")
+                return error_msg
         except Exception as e:
+            print(f"[视觉理解异常] {e}")
+            import traceback
+            traceback.print_exc()
             return f"视觉理解失败: {e}"

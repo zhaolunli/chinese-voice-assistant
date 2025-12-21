@@ -179,20 +179,21 @@ class SmartWakeWordSystem:
                         # 检查是否正在执行任务
                         if self.agent.is_executing:
                             print("⚠️ 正在执行任务中，发送中断请求...")
+                            print("   （等待当前步骤完成后中断...）")
                             self.agent.interrupt_flag = True
 
                             # 立即打断正在播放的TTS
                             if self.agent.tts.is_playing:
                                 self.agent.tts.stop()
 
-                            # 快速等待任务中断（最多1秒）
+                            # 快速等待任务中断（最多3秒）
                             wait_count = 0
-                            while self.agent.is_executing and wait_count < 10:
+                            while self.agent.is_executing and wait_count < 30:
                                 time.sleep(0.1)
                                 wait_count += 1
 
                             if self.agent.is_executing:
-                                print("⚠️ 中断超时，强制继续")
+                                print("⚠️ 当前步骤仍在执行，将在下一步中断")
                             else:
                                 print("✓ 任务已中断")
 
