@@ -145,8 +145,8 @@ class ReactAgent:
         # MCP Manager（管理多个 MCP Server）
         self.mcp = MCPManagerSync()
 
-        # TTS（流式 - RealtimeTTS + Edge TTS）
-        self.tts = TTSManagerStreaming(engine_type="edge")
+        # TTS（流式 - Piper 本地，超快）
+        self.tts = TTSManagerStreaming(engine_type="piper")
 
         # Vision（视觉理解）
         self.vision = VisionUnderstanding(api_url, api_key)
@@ -625,10 +625,22 @@ class ReactAgent:
                 return parsed
             else:
                 self.logger.error(f"LLM 请求失败: {response.status_code}")
+                print(f"⚠️ LLM 请求失败: {response.status_code}")
                 return None
 
+        except requests.exceptions.Timeout:
+            self.logger.error("LLM 请求超时")
+            print("⚠️ LLM 请求超时，请检查网络连接")
+            return None
+        except requests.exceptions.RequestException as e:
+            self.logger.error(f"LLM 网络请求错误: {e}")
+            print(f"⚠️ LLM 网络请求错误: {e}")
+            return None
         except Exception as e:
             self.logger.error(f"思考失败: {e}")
+            print(f"⚠️ 思考失败: {e}")
+            import traceback
+            traceback.print_exc()
             return None
 
     def _get_system_prompt(self) -> str:
@@ -802,6 +814,11 @@ Final Answer: [总结结果]
     def _update_memory_async(self):
         """更新长期记忆（让 LLM 自动总结当前状态）"""
         try:
+            # 如果没有实际操作历史，跳过记忆更新
+            if not self.history:
+                self.logger.debug("无操作历史，跳过记忆更新")
+                return
+
             # 构造总结提示词
             recent_actions = ""
             if self.history:

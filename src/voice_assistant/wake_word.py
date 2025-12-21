@@ -42,13 +42,13 @@ class SmartWakeWordSystem:
 
         # React Agent (集成 MCP)
         self.agent = ReactAgent()
-        print("正在启动 Windows-MCP Server...")
+        print("正在启动 MCP Servers...")
         if not self.agent.start():
-            raise RuntimeError("启动 Windows-MCP Server 失败")
+            raise RuntimeError("启动 MCP Server 失败")
 
         print(f"✓ KWS模型已加载")
         print(f"✓ ASR模型已加载")
-        print(f"✓ Windows-MCP Server 已启动")
+        print(f"✓ MCP Servers 已启动")
         print(f"语音播报: {'开启' if enable_voice else '关闭'}")
 
     def create_kws_model(self):
@@ -103,6 +103,18 @@ class SmartWakeWordSystem:
         )
         return recognizer
 
+    def _play_beep_fast(self):
+        """播放快速提示音（非阻塞）"""
+        def beep():
+            try:
+                import winsound
+                winsound.Beep(1000, 80)  # 更短更快的提示音
+            except:
+                pass
+
+        # 在单独线程播放，不阻塞主循环
+        threading.Thread(target=beep, daemon=True).start()
+
     def start_listening(self):
         """开始监听"""
         print("\n" + "="*60)
@@ -134,80 +146,82 @@ class SmartWakeWordSystem:
             kws_stream = self.kws_model.create_stream()
 
             while self.running:
-                # 读取音频
-                audio_bytes = stream.read(CHUNK_SIZE, exception_on_overflow=False)
-                audio_data = np.frombuffer(audio_bytes, dtype=np.float32)
+                try:
+                    # 读取音频
+                    audio_bytes = stream.read(CHUNK_SIZE, exception_on_overflow=False)
+                    audio_data = np.frombuffer(audio_bytes, dtype=np.float32)
 
-                # TTS播放期间仍然监听，但需要更高音量才触发（允许打断）
-                if self.agent.tts.is_playing:
-                    # 检测音量峰值，判断是否是真实的语音打断
-                    volume = np.sqrt(np.mean(audio_data**2))
-                    # 如果音量过低（可能是TTS回声），跳过检测
-                    if volume < 0.02:  # 降低阈值，更容易打断
-                        time.sleep(0.01)
-                        continue
-                    # 音量足够高，可能是用户打断，继续检测
+                    # TTS播放期间仍然监听（允许打断）
+                    if self.agent.tts.is_playing:
+                        # 检测音量峰值，判断是否是真实的语音打断
+                        volume = np.sqrt(np.mean(audio_data**2))
+                        # 如果音量过低（可能是TTS回声），跳过检测
+                        if volume < 0.02:  # 降低阈值，更容易打断
+                            continue  # ✓ 移除 sleep，立即继续检测
+                        # 音量足够高，可能是用户打断，继续检测
 
-                # 喂给KWS
-                kws_stream.accept_waveform(self.sample_rate, audio_data)
+                    # 喂给KWS
+                    kws_stream.accept_waveform(self.sample_rate, audio_data)
 
-                # 检测关键词
-                while self.kws_model.is_ready(kws_stream):
-                    self.kws_model.decode_stream(kws_stream)
+                    # 检测关键词
+                    while self.kws_model.is_ready(kws_stream):
+                        self.kws_model.decode_stream(kws_stream)
 
-                # 获取结果
-                result = self.kws_model.get_result(kws_stream)
+                    # 获取结果
+                    result = self.kws_model.get_result(kws_stream)
 
-                if result:
-                    print(f"\n✨ 检测到唤醒词: {result}")
+                    if result:
+                        print(f"\n✨ 检测到唤醒词: {result}")
 
-                    # 检查是否正在执行任务
-                    if self.agent.is_executing:
-                        print("⚠️ 正在执行任务中，发送中断请求...")
-                        self.agent.interrupt_flag = True
+                        # 立即播放本地提示音（无延迟）
+                        self._play_beep_fast()
 
-                        # 打断正在播放的TTS
+                        # 检查是否正在执行任务
+                        if self.agent.is_executing:
+                            print("⚠️ 正在执行任务中，发送中断请求...")
+                            self.agent.interrupt_flag = True
+
+                            # 立即打断正在播放的TTS
+                            if self.agent.tts.is_playing:
+                                self.agent.tts.stop()
+
+                            # 快速等待任务中断（最多1秒）
+                            wait_count = 0
+                            while self.agent.is_executing and wait_count < 10:
+                                time.sleep(0.1)
+                                wait_count += 1
+
+                            if self.agent.is_executing:
+                                print("⚠️ 中断超时，强制继续")
+                            else:
+                                print("✓ 任务已中断")
+
+                            # 重置KWS流，等待下一次唤醒
+                            kws_stream = self.kws_model.create_stream()
+                            continue
+
+                        # 立即打断正在播放的TTS
                         if self.agent.tts.is_playing:
                             self.agent.tts.stop()
 
-                        # 等待任务中断（最多等待5秒）
-                        wait_count = 0
-                        while self.agent.is_executing and wait_count < 50:
-                            time.sleep(0.1)
-                            wait_count += 1
+                        # 启动命令处理线程（非阻塞）
+                        command_thread = threading.Thread(
+                            target=self._handle_command_in_thread,
+                            daemon=True
+                        )
+                        command_thread.start()
 
-                        if self.agent.is_executing:
-                            print("⚠️ 中断超时，任务可能仍在执行")
-                        else:
-                            print("✓ 任务已中断")
-
-                        # 重置KWS流，等待下一次唤醒
+                        # 重置KWS流
                         kws_stream = self.kws_model.create_stream()
-                        continue
 
-                    # 打断正在播放的TTS
-                    if self.agent.tts.is_playing:
-                        self.agent.tts.stop()
-
-                    # 提示音（Beep后用户就可以开始说话）
+                except Exception as e:
+                    print(f"⚠️ 音频处理错误: {e}")
+                    # 重新创建流，继续运行
                     try:
-                        import winsound
-                        # 双提示音：第一声表示唤醒，第二声表示开始录音
-                        winsound.Beep(800, 100)
-                        time.sleep(0.1)
-                        winsound.Beep(1000, 100)
+                        kws_stream = self.kws_model.create_stream()
                     except:
                         pass
-
-                    # 启动命令处理线程（非阻塞）
-                    command_thread = threading.Thread(
-                        target=self._handle_command_in_thread,
-                        daemon=True
-                    )
-                    command_thread.start()
-
-                    # 重置KWS流
-                    kws_stream = self.kws_model.create_stream()
+                    continue
 
             stream.stop_stream()
             stream.close()
@@ -218,9 +232,9 @@ class SmartWakeWordSystem:
         finally:
             self.running = False
             # 停止 MCP Server
-            print("正在停止 Windows-MCP Server...")
+            print("正在停止 MCP Servers...")
             self.agent.stop()
-            print("✓ Windows-MCP Server 已停止")
+            print("✓ MCP Servers 已停止")
 
     def _handle_command_in_thread(self):
         """在单独线程中处理命令（非阻塞）"""
@@ -234,8 +248,10 @@ class SmartWakeWordSystem:
             p = pyaudio.PyAudio()
             self._enter_command_mode(p)
             p.terminate()
+        except KeyboardInterrupt:
+            print("⚠️ 用户中断命令处理")
         except Exception as e:
-            print(f"命令处理错误: {e}")
+            print(f"⚠️ 命令处理错误: {e}")
             import traceback
             traceback.print_exc()
         finally:
@@ -316,10 +332,15 @@ class SmartWakeWordSystem:
         """执行命令（使用 React Agent）"""
         print(f"🤖 开始执行: {text}")
 
-        # 使用 React Agent 执行（自动多轮推理）
-        result = self.agent.execute_command(text, enable_voice=self.enable_voice)
+        try:
+            # 使用 React Agent 执行（自动多轮推理）
+            result = self.agent.execute_command(text, enable_voice=self.enable_voice)
 
-        if result.get("success"):
-            print(f"✓ 执行完成 (共 {result.get('steps', 0)} 步)\n")
-        else:
-            print(f"✗ 执行失败: {result.get('message', '未知错误')}\n")
+            if result.get("success"):
+                print(f"✓ 执行完成 (共 {result.get('steps', 0)} 步)\n")
+            else:
+                print(f"✗ 执行失败: {result.get('message', '未知错误')}\n")
+        except Exception as e:
+            print(f"⚠️ 命令执行异常: {e}\n")
+            import traceback
+            traceback.print_exc()
