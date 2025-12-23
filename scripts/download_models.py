@@ -10,11 +10,18 @@ from pathlib import Path
 
 # 模型下载配置
 MODELS = {
-    # 语音唤醒模型（小巧，3.3MB）
+    # 语音唤醒模型（小巧，3.3MB）- GigaSpeech
     "kws": {
         "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01.tar.bz2",
         "filename": "kws.tar.bz2",
-        "description": "语音唤醒模型 (支持自定义唤醒词)"
+        "description": "语音唤醒模型 (GigaSpeech, 支持自定义唤醒词)"
+    },
+
+    # 语音唤醒模型（小巧，3.3MB）- WenetSpeech
+    "kws_wenetspeech": {
+        "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01.tar.bz2",
+        "filename": "kws-wenetspeech.tar.bz2",
+        "description": "语音唤醒模型 (WenetSpeech, 支持自定义唤醒词)"
     },
     
     # 中文语音识别模型（Paraformer，最优，120MB）
